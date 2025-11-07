@@ -1,0 +1,89 @@
+# ===============================
+# Python
+# ===============================
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+
+# ===============================
+# Virtual Environments
+# ===============================
+venv/
+.env/
+.venv/
+env/
+poison-detect/
+
+# ===============================
+# Data and Models
+# ===============================
+data/*.pt
+data/*.pkl
+models/*.pt
+models/*.pth
+models/checkpoints/
+outputs/ddpg_agent_*.pt
+
+# Keep directory structure
+!data/.gitkeep
+!models/.gitkeep
+!outputs/.gitkeep
+
+# ===============================
+# Notebooks and Logs
+# ===============================
+*.ipynb_checkpoints/
+*.log
+logs/
+
+# ===============================
+# IDE and OS Files
+# ===============================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ===============================
+# Environment / Config
+# ===============================
+.env
+config.yaml
+credentials.json
+secrets.yaml
+
+# ===============================
+# ML / Experiment Tracking
+# ===============================
+runs/
+wandb/
+mlruns/
+
+# ===============================
+# Documentation (Keep)
+# ===============================
+!README.md
+!requirements.txt
+!PROJECT_DETAILED_EXPLANATION.md
+!OUTPUT_INSIGHTS_ANALYSIS.md
+
+
+# ===============================
+# Data and Datasets (Ignored)
+# ===============================
+data/
+cifar-10-python/
+*.tar.gz
+*.zip
+*.h5
+*.pkl
+*.pt
+*.pth
+
+# Keep data folder structure only
+!data/.gitkeep
+!data/__init__.py
