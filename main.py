@@ -230,7 +230,9 @@ def main():
                 device=device,
                 initial_percentile=95.0,
                 num_iterations=10,
-                output_dir="outputs"
+                output_dir="outputs",
+                use_subset=True,  # Use subset for faster computation
+                subset_size=5000  # Use 5000 samples instead of full dataset
             )
             feedback_results[attack_name] = feedback_result
             print(f"✓ Feedback loop completed for {attack_name}")
