@@ -109,23 +109,44 @@ def evaluate_model(model, dataset: TensorDataset, device: torch.device,
 
 
 def plot_accuracy_comparison(results_dict: dict, output_dir: str = "outputs"):
-    """Plot accuracy comparison across different datasets."""
+    """Plot accuracy comparison: Poisoned vs Clean datasets."""
     os.makedirs(output_dir, exist_ok=True)
     
-    datasets = list(results_dict.keys())
+    # Separate poisoned and clean datasets
+    poisoned_datasets = []
+    clean_dataset = None
+    
+    for ds_name, _ in results_dict.items():
+        if ds_name == 'clean':
+            clean_dataset = ds_name
+        else:
+            poisoned_datasets.append(ds_name)
+    
+    # Order: poisoned first, then clean
+    datasets = poisoned_datasets + ([clean_dataset] if clean_dataset else [])
     accuracies = [results_dict[ds]['accuracy'] for ds in datasets]
     
-    plt.figure(figsize=(10, 6))
-    bars = plt.bar(datasets, accuracies, color=['green', 'red', 'orange', 'purple'][:len(datasets)])
-    plt.ylabel('Accuracy', fontsize=12)
-    plt.xlabel('Dataset', fontsize=12)
-    plt.title('Model Accuracy Comparison: Clean vs Attacked Datasets', fontsize=14)
+    # Color scheme: red/orange for poisoned, green for clean
+    colors = ['red', 'orange', 'purple', 'coral'][:len(poisoned_datasets)] + (['green'] if clean_dataset else [])
+    
+    plt.figure(figsize=(12, 6))
+    bars = plt.bar(datasets, accuracies, color=colors)
+    plt.ylabel('Accuracy', fontsize=12, fontweight='bold')
+    plt.xlabel('Dataset Type', fontsize=12, fontweight='bold')
+    plt.title('Model Accuracy Comparison: Poisoned vs Clean Datasets', fontsize=14, fontweight='bold')
     plt.ylim(0, 1)
     
     # Add value labels on bars
     for bar, acc in zip(bars, accuracies):
         plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                f'{acc:.3f}', ha='center', va='bottom', fontsize=10)
+                f'{acc:.3f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    # Add a vertical line to separate poisoned from clean
+    if clean_dataset and poisoned_datasets:
+        separator_x = len(poisoned_datasets) - 0.5
+        plt.axvline(x=separator_x, color='gray', linestyle='--', linewidth=2, alpha=0.5)
+        plt.text(separator_x, 0.95, 'Poisoned → Clean', rotation=90, 
+                ha='center', va='top', fontsize=9, style='italic')
     
     plt.grid(axis='y', alpha=0.3)
     plt.tight_layout()

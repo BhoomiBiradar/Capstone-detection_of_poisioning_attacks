@@ -78,8 +78,8 @@ def explain_with_lime(
     # Initialize LIME explainer
     explainer = lime_image.LimeImageExplainer()
 
-    # Explain each sample
-    fig, axes = plt.subplots(num_samples, 2, figsize=(12, 3 * num_samples))
+    # Structured LIME visualization: Original | LIME Explanation
+    fig, axes = plt.subplots(num_samples, 2, figsize=(12, 4 * num_samples))
     if num_samples == 1:
         axes = axes.reshape(1, -1)
 
@@ -96,35 +96,45 @@ def explain_with_lime(
                 img_np,
                 predict_fn,
                 top_labels=1,
-                hide_color=0,
+                hide_color=0.0,
                 num_samples=1000,
             )
 
-            # Get explanation for the predicted class
             temp, mask = explanation.get_image_and_mask(
-                explanation.top_labels[0], positive_only=True, num_features=10, hide_rest=False
+                explanation.top_labels[0],
+                positive_only=False,
+                num_features=10,
+                hide_rest=True,
             )
 
-            # Plot original and explanation
+            # Original image
             axes[idx, 0].imshow(img_np)
-            axes[idx, 0].set_title(f"Original (Label: {label.item()})")
+            axes[idx, 0].set_title(f"Original Image {idx+1}\n(Label: {label.item()})", 
+                                   fontsize=11, fontweight='bold')
             axes[idx, 0].axis("off")
 
-            axes[idx, 1].imshow(mark_boundaries(temp, mask))
-            axes[idx, 1].set_title("LIME Explanation")
+            # LIME explanation with boundaries
+            marked = mark_boundaries(img_np, mask, color=(1, 0, 0), outline_color=(0, 1, 0), mode='thick')
+            axes[idx, 1].imshow(marked)
+            axes[idx, 1].set_title(f"LIME Explanation\n(Green=Important Regions)", 
+                                   fontsize=11, fontweight='bold')
             axes[idx, 1].axis("off")
 
         except Exception as e:
             print(f"LIME explanation failed for sample {idx}: {e}")
             # Fallback: show original image
             axes[idx, 0].imshow(img_np)
-            axes[idx, 0].set_title(f"Original (Label: {label.item()})")
+            axes[idx, 0].set_title(f"Original Image {idx+1}\n(Label: {label.item()})", 
+                                   fontsize=11, fontweight='bold')
             axes[idx, 0].axis("off")
 
             axes[idx, 1].imshow(img_np)
-            axes[idx, 1].set_title("Explanation unavailable")
+            axes[idx, 1].set_title("LIME Explanation\n(Unavailable)", 
+                                   fontsize=11, fontweight='bold', color='red')
             axes[idx, 1].axis("off")
 
+    plt.suptitle('LIME Explanations: Local Interpretable Model-Agnostic Explanations', 
+                fontsize=14, fontweight='bold', y=0.995)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "lime_explanations.png"), dpi=150, bbox_inches="tight")
     plt.close()

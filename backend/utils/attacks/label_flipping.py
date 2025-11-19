@@ -1,7 +1,7 @@
 import torch
 
 
-def apply_label_flipping_attack(images, labels, save_path, flip_from=3, flip_to=5, flip_ratio=0.2):
+def apply_label_flipping_attack(images, labels, save_path, flip_from=3, flip_to=5, flip_ratio=0.4):
     """
     Applies a label flipping attack by changing a portion of labels from one class to another.
     
@@ -33,8 +33,9 @@ def apply_label_flipping_attack(images, labels, save_path, flip_from=3, flip_to=
     num_to_flip = int(total_candidates * flip_ratio)
     print(f"Preparing to flip {num_to_flip} labels from {flip_from} to {flip_to}...")
 
-    # Select the first num_to_flip indices (can be randomized if needed)
-    flip_indices = indices_to_consider[:num_to_flip]
+    # Randomly shuffle and select indices for more realistic attack
+    shuffled_indices = indices_to_consider[torch.randperm(len(indices_to_consider))]
+    flip_indices = shuffled_indices[:num_to_flip]
 
     # Perform the label flipping
     print("Modifying labels at selected indices...")

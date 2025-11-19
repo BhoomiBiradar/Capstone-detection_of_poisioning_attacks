@@ -1,7 +1,7 @@
 import torch
 
 
-def apply_fgsm_attack(images, labels, save_path, epsilon=0.1):
+def apply_fgsm_attack(images, labels, save_path, epsilon=0.1, model=None, device=None):
     """
     Applies Fast Gradient Sign Method (FGSM) to create adversarial examples.
     
@@ -10,22 +10,34 @@ def apply_fgsm_attack(images, labels, save_path, epsilon=0.1):
         labels (torch.Tensor): Corresponding true labels for the input images.
         save_path (str): File path to save the perturbed (adversarial) images.
         epsilon (float): Attack strength parameter that scales the perturbation.
+        model: Trained model to use for gradient computation (if None, uses dummy model).
+        device: Device to run the model on.
     Returns:
         None
     """
     print("Starting FGSM Attack...")
+    
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Ensure gradients can be computed for image tensor
     print("Enabling gradient tracking for images...")
+    images = images.clone().detach().to(device)
     images.requires_grad = True
+    labels = labels.to(device)
 
-    # Define a small placeholder model (not trained)
-    print("Initializing dummy model for gradient computation...")
-    model = torch.nn.Sequential(
-        torch.nn.Flatten(),
-        torch.nn.Linear(32*32*3, 100),
-        torch.nn.ReLU(),
-        torch.nn.Linear(100, 10)
-    )
+    # Use provided model or create a dummy model
+    if model is not None:
+        print("Using provided trained model for gradient computation...")
+        model.eval()
+    else:
+        print("Warning: No model provided, using dummy model (attack may be less effective)...")
+        model = torch.nn.Sequential(
+            torch.nn.Flatten(),
+            torch.nn.Linear(32*32*3, 100),
+            torch.nn.ReLU(),
+            torch.nn.Linear(100, 10)
+        ).to(device)
 
     # Forward pass to compute predictions
     print("Performing forward pass through the model...")
@@ -38,6 +50,7 @@ def apply_fgsm_attack(images, labels, save_path, epsilon=0.1):
 
     # Backward pass to compute gradients
     print("Performing backward pass to calculate gradients...")
+    model.zero_grad()
     loss.backward()
 
     # Generate adversarial perturbations using sign of gradients
@@ -51,7 +64,7 @@ def apply_fgsm_attack(images, labels, save_path, epsilon=0.1):
     # Save the perturbed data along with original labels
     all_indices = torch.arange(len(images))
     print(f"Saving adversarial dataset to: {save_path}")
-    torch.save((perturbed_data.detach(), labels, all_indices), save_path)
+    torch.save((perturbed_data.detach().cpu(), labels.cpu(), all_indices), save_path)
 
     print("FGSM attack applied and saved successfully!\n")
 

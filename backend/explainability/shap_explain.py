@@ -41,6 +41,8 @@ def explain_with_shap(
         x_sample = x[sample_indices].to(device)
         y_sample = y[sample_indices]
 
+    num_explain = max(1, min(5, len(x_sample)))
+
     # Create a wrapper function for SHAP
     def model_wrapper(x_input):
         """Wrapper to convert numpy to torch and get predictions."""
@@ -73,9 +75,36 @@ def explain_with_shap(
         if isinstance(shap_values, list):
             shap_values = shap_values[0]  # Take first class
 
-        # Plot SHAP values
-        plt.figure(figsize=(12, 8))
-        shap.image_plot(shap_values, x_sample[:num_explain].cpu().numpy(), show=False)
+        # Structured SHAP visualization: Original | SHAP Heatmap
+        num_explain = min(5, len(x_sample))
+        fig, axes = plt.subplots(num_explain, 2, figsize=(12, 4 * num_explain))
+        if num_explain == 1:
+            axes = axes.reshape(1, -1)
+        
+        x_np = x_sample[:num_explain].cpu().numpy()
+        shap_np = shap_values
+        
+        for i in range(num_explain):
+            # Original image
+            img_original = x_np[i].transpose(1, 2, 0)
+            img_original = np.clip(img_original, 0, 1)
+            axes[i, 0].imshow(img_original)
+            axes[i, 0].set_title(f"Original Image {i+1}\n(Label: {y_sample[i].item()})", 
+                                 fontsize=11, fontweight='bold')
+            axes[i, 0].axis('off')
+            
+            # SHAP values heatmap
+            shap_img = shap_np[i].transpose(1, 2, 0)
+            shap_img = np.abs(shap_img).sum(axis=2)  # Sum across channels
+            im = axes[i, 1].imshow(shap_img, cmap='hot', interpolation='nearest')
+            axes[i, 1].set_title(f"SHAP Explanation\n(Red = High Impact)", 
+                                 fontsize=11, fontweight='bold')
+            axes[i, 1].axis('off')
+            plt.colorbar(im, ax=axes[i, 1], fraction=0.046, pad=0.04)
+        
+        plt.suptitle('SHAP Explanations: Feature Importance Analysis', 
+                    fontsize=14, fontweight='bold', y=0.995)
+        plt.tight_layout()
         plt.savefig(os.path.join(output_dir, "shap_explanations.png"), dpi=150, bbox_inches="tight")
         plt.close()
 
@@ -93,16 +122,30 @@ def explain_with_shap(
 
         gradients = x_sample.grad.abs().mean(dim=1).cpu().numpy()
 
-        fig, axes = plt.subplots(2, num_explain, figsize=(15, 6))
+        # Structured fallback visualization: Original | Gradient
+        fig, axes = plt.subplots(num_explain, 2, figsize=(12, 4 * num_explain))
+        if num_explain == 1:
+            axes = axes.reshape(1, -1)
+        
         for i in range(num_explain):
-            axes[0, i].imshow(x_sample[i].detach().cpu().permute(1, 2, 0).numpy())
-            axes[0, i].set_title(f"Sample {i}")
-            axes[0, i].axis("off")
+            img_original = x_sample[i].detach().cpu().permute(1, 2, 0).numpy()
+            img_original = np.clip(img_original, 0, 1)
+            
+            # Original image
+            axes[i, 0].imshow(img_original)
+            axes[i, 0].set_title(f"Original Image {i+1}\n(Label: {y_sample[i].item()})", 
+                                 fontsize=11, fontweight='bold')
+            axes[i, 0].axis("off")
 
-            axes[1, i].imshow(gradients[i], cmap="hot")
-            axes[1, i].set_title(f"Gradient {i}")
-            axes[1, i].axis("off")
+            # Gradient heatmap
+            im = axes[i, 1].imshow(gradients[i], cmap="hot", interpolation='nearest')
+            axes[i, 1].set_title(f"Gradient Explanation\n(Red = High Impact)", 
+                                 fontsize=11, fontweight='bold')
+            axes[i, 1].axis("off")
+            plt.colorbar(im, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
+        plt.suptitle('Gradient-Based Explanations: Feature Importance Analysis (Fallback)', 
+                    fontsize=14, fontweight='bold', y=0.995)
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, "shap_explanations.png"), dpi=150, bbox_inches="tight")
         plt.close()

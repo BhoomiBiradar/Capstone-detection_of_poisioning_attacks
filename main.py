@@ -2,8 +2,8 @@ import os
 import torch
 import numpy as np
 
-from data.prepare_and_attacks import prepare_cifar10_and_attacks
-from models.cnn_model import build_cnn, train_cnn, eval_cnn
+from backend.utils.data_preparation import prepare_cifar10_and_attacks
+from backend.models.cnn_model import build_cnn, train_cnn, eval_cnn
 from models.autoencoder_model import build_autoencoder, train_autoencoder
 from detectors.centroid_detector import detect_anomalies_centroid, save_detector_results as save_centroid_results
 from detectors.knn_detector import detect_anomalies_knn, save_detector_results as save_knn_results
@@ -12,8 +12,13 @@ from detectors.gradient_filter import detect_anomalies_gradient, save_detector_r
 from explainability.shap_explain import explain_with_shap
 from explainability.lime_explain import explain_with_lime
 from feedback.feedback_loop import adaptive_detection_with_feedback
-from evaluation_metrics import compute_all_metrics, plot_feedback_learning_curve
+from backend.evaluation_metrics import compute_all_metrics, plot_feedback_learning_curve
 
+# Add import for the new fusion detector
+try:
+    from backend.detectors.fusion_detector import detect_anomalies_fusion, save_fusion_results
+except ImportError:
+    from detectors.fusion_detector import detect_anomalies_fusion, save_fusion_results
 
 def ensure_dirs():
     """Create all necessary directories."""
@@ -32,7 +37,7 @@ def main():
     """Main pipeline execution."""
     print("=" * 80)
     print("Detecting Poisoning Attacks in Machine Learning Pipelines")
-    print("Feedback-Driven Real-Time Detection System")
+    print("Feedback-Driven Real-Time Detection System with Fusion Detector")
     print("=" * 80)
     
     ensure_dirs()
@@ -103,6 +108,7 @@ def main():
     }
     
     detector_results_all = {}
+    fusion_results_all = {}
     
     for attack_name, attacked_dataset in attacked_datasets.items():
         print(f"\nRunning detectors on {attack_name} dataset...")
@@ -162,6 +168,36 @@ def main():
         except Exception as e:
             print(f"    Error: {e}")
             detector_results_all[f"{attack_name}_gradient"] = []
+        
+        # NEW: Fusion Detector with Weighted Voting
+        print("  - Fusion Detector (Weighted Voting)...")
+        try:
+            anomaly_idx_fusion, cleaned_fusion, scores_fusion = detect_anomalies_fusion(
+                attacked_dataset, cnn, autoenc, device, percentile=95.0
+            )
+            save_fusion_results(anomaly_idx_fusion, scores_fusion, cleaned_fusion,
+                               f"{attack_name}_fusion", "data")
+            fusion_results_all[f"{attack_name}_fusion"] = {
+                'indices': anomaly_idx_fusion,
+                'cleaned_dataset': cleaned_fusion
+            }
+            print(f"    Found {len(anomaly_idx_fusion)} anomalies with fusion detector")
+            
+            # Evaluate accuracy improvement with fusion detector
+            print("  - Evaluating accuracy improvement...")
+            acc_before_cleaning = eval_cnn(cnn, attacked_dataset, device=device, batch_size=256)
+            acc_after_cleaning = eval_cnn(cnn, cleaned_fusion, device=device, batch_size=256)
+            print(f"    Accuracy before cleaning: {acc_before_cleaning:.4f}")
+            print(f"    Accuracy after cleaning:  {acc_after_cleaning:.4f}")
+            print(f"    Improvement: {acc_after_cleaning - acc_before_cleaning:+.4f}")
+        except Exception as e:
+            print(f"    Error in fusion detector: {e}")
+            import traceback
+            traceback.print_exc()
+            fusion_results_all[f"{attack_name}_fusion"] = {
+                'indices': [],
+                'cleaned_dataset': attacked_dataset
+            }
     
     # ========================================================================
     # 4. Results, Plots, and Explainability
@@ -190,6 +226,11 @@ def main():
             key = f"{attack_name}_{detector_name}"
             if key in detector_results_all:
                 all_anomalies.update(detector_results_all[key])
+        
+        # Add fusion detector anomalies
+        fusion_key = f"{attack_name}_fusion"
+        if fusion_key in fusion_results_all:
+            all_anomalies.update(fusion_results_all[fusion_key]['indices'])
         
         anomaly_list = list(all_anomalies)
         
@@ -236,6 +277,14 @@ def main():
             )
             feedback_results[attack_name] = feedback_result
             print(f"✓ Feedback loop completed for {attack_name}")
+            
+            # Show final accuracy comparison
+            if feedback_result['results']:
+                final_metrics = feedback_result['results'][-1]['metrics']
+                print(f"  Final Results for {attack_name}:")
+                print(f"    Accuracy before cleaning: {final_metrics['accuracy_before_cleaning']:.4f}")
+                print(f"    Accuracy after cleaning:  {final_metrics['accuracy_after_cleaning']:.4f}")
+                print(f"    Improvement: {final_metrics['accuracy_improvement']:+.4f}")
         except Exception as e:
             print(f"  Error in feedback loop for {attack_name}: {e}")
             import traceback
@@ -259,6 +308,7 @@ def main():
     print("  - Data files: data/*.pt")
     print("  - Model weights: models/*.pt")
     print("  - Detection results: data/*_anomalies.pt, data/*_cleaned.pt")
+    print("  - Fusion results: data/*_fusion_*.pt")
     print("  - Evaluation plots: outputs/accuracy_comparison.png")
     print("  - Confusion matrices: outputs/confusion_matrices.png")
     print("  - SHAP explanations: outputs/shap_*/")

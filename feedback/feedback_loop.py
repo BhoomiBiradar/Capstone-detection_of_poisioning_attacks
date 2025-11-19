@@ -13,11 +13,17 @@ try:
     from backend.detectors.knn_detector import detect_anomalies_knn
     from backend.detectors.autoencoder_detector import detect_anomalies_autoencoder
     from backend.detectors.gradient_filter import detect_anomalies_gradient
+    from backend.detectors.fusion_detector import (
+        run_all_detectors, weighted_voting_fusion, apply_adaptive_threshold, create_cleaned_dataset
+    )
 except ImportError:
     from detectors.centroid_detector import detect_anomalies_centroid
     from detectors.knn_detector import detect_anomalies_knn
     from detectors.autoencoder_detector import detect_anomalies_autoencoder
     from detectors.gradient_filter import detect_anomalies_gradient
+    from detectors.fusion_detector import (
+        run_all_detectors, weighted_voting_fusion, apply_adaptive_threshold, create_cleaned_dataset
+    )
 
 
 def compute_metrics(y_true, y_pred, anomaly_mask_true, anomaly_mask_pred):
@@ -110,7 +116,9 @@ def adaptive_detection_with_feedback(
     subset_size: int = 5000
 ) -> Dict:
     """
-    Adaptive detection with DDPG feedback loop - OPTIMIZED VERSION.
+    Adaptive detection with DDPG feedback loop using fusion detector.
+    
+    Workflow: detector outputs → combine → DDPG agent → adaptive threshold → final flags
     
     Args:
         clean_dataset: Clean dataset (ground truth)
@@ -171,6 +179,7 @@ def adaptive_detection_with_feedback(
         anomaly_ground_truth = np.zeros(len(x_attacked_subset), dtype=int)
     
     current_percentile = initial_percentile
+    current_threshold = 0.55  # Initial fusion threshold
     previous_metrics = None
     results = []
     best_det_f1 = 0.0
@@ -181,73 +190,39 @@ def adaptive_detection_with_feedback(
     print(f"Using {'subset' if use_subset else 'full'} dataset ({len(attacked_dataset_subset)} samples)")
     
     for iteration in range(num_iterations):
-        print(f"\nIteration {iteration + 1}/{num_iterations}, Threshold: {current_percentile:.2f}th percentile")
+        print(f"\nIteration {iteration + 1}/{num_iterations}, Percentile: {current_percentile:.2f}th, Threshold: {current_threshold:.3f}")
         
-        # OPTIMIZATION: Run only 2 fastest detectors (Centroid and KNN) for speed
-        # Use all 4 detectors only on first and last iteration
-        use_all_detectors = (iteration == 0 or iteration == num_iterations - 1)
-        detectors_results = {}
+        # Step 1: Run all detectors to get their outputs
+        detector_scores = run_all_detectors(
+            attacked_dataset_subset, cnn_model, autoencoder_model, device,
+            percentile=current_percentile
+        )
         
-        # Centroid detector (fast)
-        try:
-            anomaly_idx_centroid, _ = detect_anomalies_centroid(
-                attacked_dataset_subset, percentile=current_percentile
-            )
-            detectors_results['centroid'] = anomaly_idx_centroid
-        except Exception as e:
-            print(f"Centroid detector failed: {e}")
-            detectors_results['centroid'] = []
+        # Step 2: Combine detector outputs using weighted voting
+        scores = weighted_voting_fusion(detector_scores)
         
-        # KNN detector (fast)
-        try:
-            anomaly_idx_knn, _ = detect_anomalies_knn(
-                attacked_dataset_subset, k=5, percentile=current_percentile
-            )
-            detectors_results['knn'] = anomaly_idx_knn
-        except Exception as e:
-            print(f"KNN detector failed: {e}")
-            detectors_results['knn'] = []
+        # Step 3: DDPG agent processes combined outputs and adjusts threshold
+        # For this implementation, we'll use the agent to adjust the fusion threshold
+        # In a more advanced implementation, the agent could also adjust individual detector thresholds
         
-        # Autoencoder detector (slower) - only on first/last iteration
-        if use_all_detectors:
-            try:
-                anomaly_idx_ae, _ = detect_anomalies_autoencoder(
-                    attacked_dataset_subset, autoencoder_model, device, percentile=current_percentile
-                )
-                detectors_results['autoencoder'] = anomaly_idx_ae
-            except Exception as e:
-                print(f"Autoencoder detector failed: {e}")
-                detectors_results['autoencoder'] = []
-        else:
-            detectors_results['autoencoder'] = []
+        # Step 4: Apply adaptive threshold to get final flags
+        anomaly_indices = apply_adaptive_threshold(scores, current_threshold)
         
-        # Gradient filter (slower) - only on first/last iteration
-        if use_all_detectors:
-            try:
-                anomaly_idx_grad, _ = detect_anomalies_gradient(
-                    attacked_dataset_subset, cnn_model, device, percentile=current_percentile
-                )
-                detectors_results['gradient'] = anomaly_idx_grad
-            except Exception as e:
-                print(f"Gradient detector failed: {e}")
-                detectors_results['gradient'] = []
-        else:
-            detectors_results['gradient'] = []
+        # Step 5: Create cleaned dataset with flagged samples removed
+        cleaned_dataset = create_cleaned_dataset(attacked_dataset_subset, anomaly_indices)
         
-        # Combine detector results (union of all anomalies)
-        all_anomaly_indices = set()
-        for detector_results in detectors_results.values():
-            all_anomaly_indices.update(detector_results)
-        
+        # Create prediction mask
         anomaly_mask_pred = np.zeros(len(x_attacked_subset), dtype=int)
-        anomaly_mask_pred[list(all_anomaly_indices)] = 1
+        if anomaly_indices:
+            anomaly_mask_pred[anomaly_indices] = 1
         
-        # OPTIMIZATION: Faster evaluation using subset
+        # Evaluate model accuracy on cleaned dataset
         try:
             from backend.models.cnn_model import eval_cnn
         except ImportError:
             from models.cnn_model import eval_cnn
-        acc = eval_cnn(cnn_model, attacked_dataset_subset, device=device, batch_size=512)
+        acc_before_cleaning = eval_cnn(cnn_model, attacked_dataset_subset, device=device, batch_size=512)
+        acc_after_cleaning = eval_cnn(cnn_model, cleaned_dataset, device=device, batch_size=512)
         
         # Get predictions for classification metrics - OPTIMIZED: larger batch size
         from torch.utils.data import DataLoader
@@ -267,21 +242,29 @@ def adaptive_detection_with_feedback(
             y_attacked_subset.numpy(), y_pred,
             anomaly_ground_truth, anomaly_mask_pred
         )
-        metrics['accuracy'] = acc
+        metrics['accuracy_before_cleaning'] = acc_before_cleaning
+        metrics['accuracy_after_cleaning'] = acc_after_cleaning
+        metrics['accuracy_improvement'] = acc_after_cleaning - acc_before_cleaning
         metrics['threshold_percentile'] = current_percentile
+        metrics['fusion_threshold'] = current_threshold
         
         # Compute reward
         reward = compute_reward(metrics, previous_metrics)
         
-        # Get state vector
-        state = get_state_vector(metrics, current_percentile)
+        # Get state vector (include fusion threshold and accuracy improvement)
+        state = np.array([
+            metrics['accuracy_after_cleaning'],
+            metrics['detection_f1'],
+            metrics['accuracy_improvement'],
+            current_threshold
+        ])
         
         # Store transition (for next iteration)
         if previous_metrics is not None:
-            previous_state = get_state_vector(previous_metrics, previous_percentile)
+            previous_state = get_state_vector(previous_metrics, previous_threshold)
             agent.store_transition(previous_state, previous_action, previous_reward, state, False)
-            # OPTIMIZATION: Train less frequently
-            if iteration % 2 == 0:  # Train every 2 iterations
+            # Train every 2 iterations
+            if iteration % 2 == 0:
                 agent.train()
         
         # Select action (threshold adjustment)
@@ -292,7 +275,6 @@ def adaptive_detection_with_feedback(
         base_scale = 10.0
         
         # Adaptive scaling based on detection F1 score
-        # If detection F1 is low, allow larger adjustments
         if metrics['detection_f1'] < 0.1:
             scale_multiplier = 2.0  # Allow ±20 percentile adjustments
         elif metrics['detection_f1'] < 0.2:
@@ -311,11 +293,16 @@ def adaptive_detection_with_feedback(
             # First iteration: use larger adjustments for exploration
             scale_multiplier = 1.5
         
-        # Calculate dynamic threshold adjustment
-        threshold_adjustment = action[0] * base_scale * scale_multiplier
+        # Calculate dynamic threshold adjustment for percentile
+        percentile_adjustment = action[0] * base_scale * scale_multiplier
+        
+        # Adjust fusion threshold (second action dimension or use same action for both)
+        # Since our agent outputs 1D action, we'll use the same action for both but with different scaling
+        threshold_adjustment = action[0] * 0.1  # Smaller adjustments for fusion threshold
         
         # Clip to reasonable bounds
-        current_percentile = np.clip(current_percentile + threshold_adjustment, 80.0, 99.0)
+        current_percentile = np.clip(current_percentile + percentile_adjustment, 80.0, 99.0)
+        current_threshold = np.clip(current_threshold + threshold_adjustment, 0.3, 0.8)
         
         # Early stopping if no improvement
         if metrics['detection_f1'] > best_det_f1:
@@ -331,21 +318,27 @@ def adaptive_detection_with_feedback(
         # Store for next iteration
         previous_metrics = metrics
         previous_percentile = current_percentile
+        previous_threshold = current_threshold
         previous_action = action
         previous_reward = reward
         
         results.append({
             'iteration': iteration + 1,
             'metrics': metrics,
-            'threshold': current_percentile,
+            'percentile': current_percentile,
+            'fusion_threshold': current_threshold,
             'reward': reward,
+            'percentile_adjustment': percentile_adjustment,
             'threshold_adjustment': threshold_adjustment,
             'scale_multiplier': scale_multiplier
         })
         
-        print(f"  Accuracy: {metrics['accuracy']:.4f}, F1: {metrics['f1_score']:.4f}, "
-              f"Det F1: {metrics['detection_f1']:.4f}, Reward: {reward:.4f}")
-        print(f"  Threshold adjustment: {threshold_adjustment:+.2f}% (scale: {scale_multiplier:.2f}x)")
+        print(f"  Accuracy before cleaning: {acc_before_cleaning:.4f}")
+        print(f"  Accuracy after cleaning:  {acc_after_cleaning:.4f}")
+        print(f"  Improvement: {acc_after_cleaning - acc_before_cleaning:+.4f}")
+        print(f"  F1: {metrics['f1_score']:.4f}, Det F1: {metrics['detection_f1']:.4f}")
+        print(f"  Percentile adjustment: {percentile_adjustment:+.2f}%")
+        print(f"  Fusion threshold: {current_threshold:.3f} (adjustment: {threshold_adjustment:+.3f})")
     
     # Save agent
     agent.save(os.path.join(output_dir, f"ddpg_agent_{attacked_name}.pt"))
@@ -353,7 +346,8 @@ def adaptive_detection_with_feedback(
     return {
         'results': results,
         'final_metrics': results[-1]['metrics'] if results else None,
-        'detector_results': detectors_results
+        'final_percentile': current_percentile,
+        'final_threshold': current_threshold
     }
 
 
